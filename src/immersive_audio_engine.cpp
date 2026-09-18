@@ -13,26 +13,16 @@ namespace frostsoulx {
 
 namespace {
 constexpr float kInputSanitizeLimit = 2.0f;
-constexpr float kOutputCeiling = 0.96f;
-constexpr float kLimiterThreshold = 0.90f;
+constexpr float kOutputCeiling = 0.98f;
+// Keep ordinary HRTF/room peaks out of the dynamics stage. The previous 0.90 threshold
+// caused continuous gain modulation on loud passages, which was audible as low-level clipping.
+constexpr float kLimiterThreshold = 0.96f;
 constexpr float kLimiterMinGain = 0.1f;
 constexpr float kZeroEpsilon = 1.0e-12f;
 
 inline float sanitizeInputSample(float sample) noexcept {
     if (!std::isfinite(sample)) return 0.0f;
     return std::clamp(sample, -kInputSanitizeLimit, kInputSanitizeLimit);
-}
-
-inline float softClipSample(float sample) noexcept {
-    if (!std::isfinite(sample)) return 0.0f;
-    const float sign = sample < 0.0f ? -1.0f : 1.0f;
-    const float absValue = std::fabs(sample);
-    if (absValue <= 0.90f) {
-        return sample;
-    }
-    const float over = absValue - 0.90f;
-    const float compressed = 0.90f + (over / (1.0f + 9.0f * over * over));
-    return sign * std::min(compressed, kOutputCeiling);
 }
 
 inline int msToSamples(float milliseconds, int sampleRate) noexcept {
@@ -360,15 +350,15 @@ struct ImmersiveAudioEngine::Impl {
     }
 
     void applyRoomModel(float& left, float& right) noexcept {
-        if (roomPreset == RoomSimulationPreset::Off || roomMix <= 0.0f) {
-            left = softClipSample(left);
-            right = softClipSample(right);
+        // Room processing must be transparent when disabled or when spatial intensity is
+        // effectively zero. Applying softClipSample here used to distort ordinary loud
+        // samples continuously, even though the room stage was visually set to Off.
+        const float effectiveRoomMix = roomMix * spatialBlend;
+        if (roomPreset == RoomSimulationPreset::Off || effectiveRoomMix <= kZeroEpsilon) {
             return;
         }
 
         if (reflectionDelayLeft.empty() || reverbDelayLeft.empty()) {
-            left = softClipSample(left);
-            right = softClipSample(right);
             return;
         }
 
@@ -409,15 +399,12 @@ struct ImmersiveAudioEngine::Impl {
         const float wetL = reflectionL + (0.70f * reverbLowpassL);
         const float wetR = reflectionR + (0.70f * reverbLowpassR);
 
-        const float dryMix = 1.0f - roomMix;
-        left = dryMix * left + roomMix * wetL;
-        right = dryMix * right + roomMix * wetR;
+        const float dryMix = 1.0f - effectiveRoomMix;
+        left = dryMix * left + effectiveRoomMix * wetL;
+        right = dryMix * right + effectiveRoomMix * wetR;
 
         if (std::fabs(left) < kZeroEpsilon) left = 0.0f;
         if (std::fabs(right) < kZeroEpsilon) right = 0.0f;
-
-        left = softClipSample(left);
-        right = softClipSample(right);
     }
 
     SpaceDesignControls currentSpaceDesignControls() const noexcept {
@@ -618,8 +605,9 @@ bool ImmersiveAudioEngine::process(float* interleavedStereo, int frames) noexcep
 
         bool inputHasEnergy = false;
         bool outputHasEnergy = false;
-        // Fixed headroom to preserve Android output margin before room simulation.
-        constexpr float kSteamAudioOutputGain = 0.70710678f; // -3 dB
+        // Fixed headroom keeps normal HRTF output below the safety limiter. The limiter is now
+        // reserved for exceptional peaks instead of acting as a continuous tone shaper.
+        constexpr float kSteamAudioOutputGain = 0.50118723f; // -6 dB
         for (int frame = 0; frame < activeFrames; ++frame) {
             const float inputLeft = impl_->inputLeft[static_cast<std::size_t>(frame)];
             const float inputRight = impl_->inputRight[static_cast<std::size_t>(frame)];
