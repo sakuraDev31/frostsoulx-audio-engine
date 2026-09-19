@@ -162,14 +162,32 @@ private:
     mutable std::array<float, kMaxAmbisonicChannels> scratch_{};
 };
 
-/// 3D Vector-Base Amplitude Panning over a triangulated speaker mesh.
+/// Vector-Base Amplitude Panning over a speaker layout.
+///
+/// Non-full-sphere layouts
+/// -----------------------
+/// Real rigs are almost never closed spheres. Two degenerate cases have to be
+/// handled explicitly or the panner produces silence:
+///
+///  * PLANAR layouts (horizontal rings, stereo/quad/5.1 beds) have no valid
+///    triangulation at all -- every triple is coplanar with the origin, so the
+///    3x3 base matrix is singular. These fall back to classic 2D pair-wise
+///    VBAP in the plane the speakers span, with out-of-plane directions
+///    projected onto it.
+///  * PARTIAL 3D layouts (domes, 7.1.4 -- no floor speakers) triangulate fine
+///    but leave a hole in the hull. A direction pointing into the hole has no
+///    triplet with all-positive gains, so it must be projected onto the
+///    nearest hull boundary instead of being clamped to zero.
 class VbapPanner {
 public:
-    /// Triangulate the layout (convex hull on the unit sphere). Not RT safe.
+    /// Triangulate the layout (convex hull on the unit sphere), or fall back
+    /// to a planar 2D ring if the layout is degenerate. Not RT safe.
     bool prepare(const SpeakerLayout& layout);
 
     /// Compute panning gains for a direction. `gains` receives
-    /// `numSpeakers()` values, at most three of which are non-zero.
+    /// `numSpeakers()` values, at most three of which are non-zero
+    /// (two for planar layouts). Directions outside the layout's coverage are
+    /// projected onto the nearest boundary, never silenced.
     /// Real-time safe.
     void gainsFor(const Vec3& unitDir, float* FSX_RESTRICT gains) const noexcept;
 
@@ -181,7 +199,15 @@ public:
 
     std::size_t numSpeakers() const noexcept { return speakers_.size(); }
     std::size_t numTriplets() const noexcept { return triplets_.size(); }
+    /// Adjacent speaker pairs used by the planar fallback.
+    std::size_t numPairs() const noexcept { return pairs_.size(); }
+    /// True when the layout was degenerate and 2D pair panning is in use.
+    bool isPlanar() const noexcept { return planar_; }
     bool ready() const noexcept { return ready_; }
+
+    /// Largest supported layout size for the RT-safe scratch in
+    /// `gainsForSpread`.
+    static constexpr std::size_t kMaxSpeakers = 128;
 
 private:
     struct Triplet {
@@ -190,9 +216,23 @@ private:
         std::array<float, 9> inv{};
     };
 
+    struct Pair {
+        std::size_t a = 0, b = 0;
+        // Inverse of the 2x2 base matrix (in-plane coords), row-major.
+        std::array<float, 4> inv{};
+    };
+
+    bool preparePlanar(const SpeakerLayout& layout);
+    void planarGains(const Vec3& unitDir, float* FSX_RESTRICT gains) const noexcept;
+
     bool ready_ = false;
+    bool planar_ = false;
     std::vector<Vec3> speakers_;
     std::vector<Triplet> triplets_;
+    std::vector<Pair> pairs_;
+    // Orthonormal basis of the plane spanned by a degenerate layout.
+    Vec3 planeU_{1.0f, 0.0f, 0.0f};
+    Vec3 planeV_{0.0f, 1.0f, 0.0f};
 };
 
 } // namespace frostsoulx::spatial

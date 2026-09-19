@@ -12,6 +12,16 @@ enum class ImmersiveProcessResult {
     SteamAudioUnavailable,
     InvalidOutput,
     SteamAudioProcessed,
+    /// Processed by the built-in HOA/HRTF spatial renderer. Reported when the
+    /// Steam Audio backend is not compiled in or failed to initialise.
+    NativeSpatialProcessed,
+};
+
+/// Which spatialiser `process()` is currently driving.
+enum class SpatialBackend {
+    None,        ///< not prepared
+    SteamAudio,  ///< vendored Steam Audio binaural effect
+    Native,      ///< built-in HOA encode -> rotate -> HRTF convolution
 };
 
 enum class RoomSimulationPreset {
@@ -59,10 +69,21 @@ public:
     void setStereoWidth(float width) noexcept;
     SpaceDesignControls spaceDesignControls() const noexcept;
 
+    /// Head orientation for the native renderer's sound-field rotation.
+    /// Degrees; yaw+ = turn left, pitch+ = look up, roll+ = tilt right.
+    /// Control thread only. Ignored by the Steam Audio backend.
+    void setHeadOrientation(float yawDeg, float pitchDeg, float rollDeg) noexcept;
+
     bool isPrepared() const noexcept;
     int maxFrames() const noexcept;
     ImmersiveProcessResult lastProcessResult() const noexcept;
     int lastEffectState() const noexcept;
+
+    /// Which spatialiser is active after `prepare()`.
+    SpatialBackend backend() const noexcept;
+    /// Algorithmic latency added by the active spatial stage, in samples.
+    int latencySamples() const noexcept;
+
     bool process(float* interleavedStereo, int frames) noexcept;
 
 private:

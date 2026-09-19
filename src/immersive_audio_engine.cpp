@@ -1,5 +1,8 @@
 #include "frostsoulx/immersive_audio_engine.h"
 
+#include "frostsoulx/rt/rt_types.h"
+#include "frostsoulx/spatial/spatial_renderer.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -97,6 +100,11 @@ struct ImmersiveAudioEngine::Impl {
     float limiterGain = 1.0f;
     float limiterReleaseCoeff = 0.9996f;
     float limiterAttackCoeff = 0.98f;
+
+    // Built-in spatialiser used when Steam Audio is unavailable. Owns the
+    // HRTF/HRIR set, the HOA bus and the partitioned binaural convolution.
+    spatial::SpatialRenderer nativeRenderer;
+    SpatialBackend backend = SpatialBackend::None;
 
 #if defined(FROSTSOULX_STEAM_AUDIO_AVAILABLE)
     IPLContext context = nullptr;
@@ -435,6 +443,25 @@ bool ImmersiveAudioEngine::prepare(int sampleRate, int maxFrames) noexcept {
     impl_->outputChannels[1] = impl_->outputRight.data();
     impl_->initializeRoomBuffers();
 
+    // Native spatial renderer: HOA encode -> sound-field rotation -> HRTF
+    // convolution. This is the fallback path when Steam Audio is not
+    // available, and it is what makes the engine's spatial chain testable on
+    // the host where the vendored Android .so cannot be loaded.
+    bool nativeReady = false;
+    {
+        spatial::SpatialRendererConfig scfg;
+        scfg.ambisonicOrder = 2;
+        scfg.array = spatial::VirtualArray::Dodeca12;
+        scfg.hrirTaps = 128;
+        scfg.renderBlock = 128;
+        nativeReady = impl_->nativeRenderer.prepare(static_cast<double>(sampleRate),
+                                                    maxFrames, scfg);
+        if (nativeReady) {
+            impl_->nativeRenderer.setStereoWidth(impl_->widthNorm);
+            impl_->nativeRenderer.setSpatialBlend(impl_->spatialBlend);
+        }
+    }
+
 #if defined(FROSTSOULX_STEAM_AUDIO_AVAILABLE)
     IPLContextSettings contextSettings{};
     contextSettings.version = STEAMAUDIO_VERSION;
@@ -463,9 +490,14 @@ bool ImmersiveAudioEngine::prepare(int sampleRate, int maxFrames) noexcept {
         impl_->release();
         return false;
     }
+    impl_->backend = SpatialBackend::SteamAudio;
 #else
-    impl_->release();
-    return false;
+    // No Steam Audio: run the built-in renderer rather than failing closed.
+    if (!nativeReady) {
+        impl_->release();
+        return false;
+    }
+    impl_->backend = SpatialBackend::Native;
 #endif
 
     impl_->prepared = true;

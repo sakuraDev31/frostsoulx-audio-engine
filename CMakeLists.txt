@@ -14,6 +14,10 @@ option(FROSTSOULX_BUILD_TESTS
 
 add_library(frostsoulx_immersive_audio STATIC
     src/immersive_audio_engine.cpp
+    src/dsp/partitioned_convolver.cpp
+    src/spatial/ambisonics.cpp
+    src/spatial/hrtf.cpp
+    src/spatial/spatial_renderer.cpp
 )
 target_include_directories(frostsoulx_immersive_audio PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

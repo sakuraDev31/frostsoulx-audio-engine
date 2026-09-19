@@ -410,9 +410,9 @@ void AmbisonicRotator::setOrder(int order) noexcept {
 }
 
 void AmbisonicRotator::setOrientation(const HeadOrientation& o) noexcept {
-    const float y = -o.yawDeg * rt::kDegToRad;
-    const float p = -o.pitchDeg * rt::kDegToRad;
-    const float r = -o.rollDeg * rt::kDegToRad;
+    const float y = o.yawDeg * rt::kDegToRad;
+    const float p = o.pitchDeg * rt::kDegToRad;
+    const float r = o.rollDeg * rt::kDegToRad;
 
     identity_ = (std::fabs(y) < 1.0e-6f && std::fabs(p) < 1.0e-6f && std::fabs(r) < 1.0e-6f);
     if (identity_) return;
@@ -421,11 +421,20 @@ void AmbisonicRotator::setOrientation(const HeadOrientation& o) noexcept {
     const float cp = std::cos(p), sp = std::sin(p);
     const float cr = std::cos(r), sr = std::sin(r);
 
-    // Cartesian rotation (x fwd, y left, z up).
+    // Head-to-world rotation R = Rz(yaw) * Ry(pitch) * Rx(roll); its columns are
+    // the listener's forward/left/up axes, exactly as `ListenerFrame` builds them.
+    const Vec3 fwd{cy * cp, sy * cp, -sp};
+    const Vec3 left{cy * sp * sr - sy * cr, sy * sp * sr + cy * cr, cp * sr};
+    const Vec3 up{cy * sp * cr + sy * sr, sy * sp * cr - cy * sr, cp * cr};
+
+    // Rotating the sound field into the listener's frame is the WORLD-TO-LOCAL
+    // map R^T (= ListenerFrame::toLocal), whose rows are those same axes.
+    // Negating the Euler angles is NOT equivalent to transposing unless the
+    // multiplication order is also reversed, so build the transpose directly.
     const float m[9] = {
-        cy * cp,                      cy * sp * sr - sy * cr,  cy * sp * cr + sy * sr,
-        sy * cp,                      sy * sp * sr + cy * cr,  sy * sp * cr - cy * sr,
-        -sp,                          cp * sr,                 cp * cr};
+        fwd.x,  fwd.y,  fwd.z,
+        left.x, left.y, left.z,
+        up.x,   up.y,   up.z};
 
     // Degree-1 block in ACN order (Y, Z, X) <- SH axes map to (y, z, x).
     // Index the block as [-1,0,1] = [y, z, x].
@@ -474,12 +483,135 @@ void AmbisonicRotator::rotateFrame(float* FSX_RESTRICT hoa) const noexcept {
 // VbapPanner
 // ---------------------------------------------------------------------------
 
+bool VbapPanner::preparePlanar(const SpeakerLayout& layout) {
+    // Degenerate (coplanar-with-origin) layout: horizontal rings, stereo,
+    // quad, 5.1 beds. Fall back to classic 2D pair-wise VBAP.
+    (void)layout;
+    const std::size_t n = speakers_.size();
+    if (n < 2) return false;
+
+    // Plane normal from the speaker scatter: the eigenvector of the smallest
+    // spread. For a coplanar set the cross product of any two independent
+    // speaker vectors gives it directly; average over all pairs for stability.
+    Vec3 nrm{0.0f, 0.0f, 0.0f};
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = i + 1; j < n; ++j) {
+            Vec3 c = cross(speakers_[i], speakers_[j]);
+            if (c.lengthSquared() < 1.0e-12f) continue;
+            c = c.normalized();
+            // Keep a consistent hemisphere so the contributions do not cancel.
+            if (dot(c, nrm) < 0.0f) c = c * -1.0f;
+            nrm = nrm + c;
+        }
+    }
+    if (nrm.lengthSquared() < 1.0e-12f) return false;
+    nrm = nrm.normalized();
+
+    // Orthonormal in-plane basis.
+    Vec3 ref{1.0f, 0.0f, 0.0f};
+    if (std::fabs(dot(ref, nrm)) > 0.9f) ref = Vec3{0.0f, 0.0f, 1.0f};
+    planeU_ = cross(nrm, ref).normalized();
+    planeV_ = cross(nrm, planeU_).normalized();
+
+    // Sort speakers by in-plane angle, then pair adjacent ones around the ring.
+    std::vector<std::pair<float, std::size_t>> order;
+    order.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const float u = dot(speakers_[i], planeU_);
+        const float v = dot(speakers_[i], planeV_);
+        if (std::fabs(u) < 1.0e-6f && std::fabs(v) < 1.0e-6f) continue;
+        order.emplace_back(std::atan2(v, u), i);
+    }
+    if (order.size() < 2) return false;
+    std::sort(order.begin(), order.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    pairs_.clear();
+    const std::size_t m = order.size();
+    for (std::size_t k = 0; k < m; ++k) {
+        const std::size_t ia = order[k].second;
+        const std::size_t ib = order[(k + 1) % m].second;
+        if (m == 2 && k == 1) break;  // a 2-speaker layout has a single arc
+
+        const float ax = dot(speakers_[ia], planeU_), ay = dot(speakers_[ia], planeV_);
+        const float bx = dot(speakers_[ib], planeU_), by = dot(speakers_[ib], planeV_);
+
+        // Invert the 2x2 base [a b] (columns are the speaker vectors).
+        const float det = ax * by - bx * ay;
+        if (std::fabs(det) < 1.0e-6f) continue;  // collinear pair (antipodal)
+        const float invDet = 1.0f / det;
+
+        Pair p;
+        p.a = ia;
+        p.b = ib;
+        p.inv[0] = by * invDet;
+        p.inv[1] = -bx * invDet;
+        p.inv[2] = -ay * invDet;
+        p.inv[3] = ax * invDet;
+        pairs_.push_back(p);
+    }
+
+    if (pairs_.empty()) return false;
+    planar_ = true;
+    ready_ = true;
+    return true;
+}
+
+void VbapPanner::planarGains(const Vec3& unitDir, float* FSX_RESTRICT gains) const noexcept {
+    // Project the direction onto the speaker plane. An out-of-plane source
+    // (e.g. overhead on a horizontal ring) collapses to its in-plane bearing
+    // rather than falling silent.
+    const Vec3 p = unitDir.normalized();
+    float u = dot(p, planeU_);
+    float v = dot(p, planeV_);
+    const float len = std::sqrt(u * u + v * v);
+    if (len < 1.0e-6f) {
+        // Directly along the plane normal: no bearing information. Spread
+        // evenly so energy is preserved instead of dropping to silence.
+        const float g = 1.0f / std::sqrt(static_cast<float>(speakers_.size()));
+        for (std::size_t i = 0; i < speakers_.size(); ++i) gains[i] = g;
+        return;
+    }
+    u /= len;
+    v /= len;
+
+    std::size_t bestIdx = 0;
+    float bestScore = -1.0e30f;
+    float bestG[2] = {0.0f, 0.0f};
+
+    for (std::size_t k = 0; k < pairs_.size(); ++k) {
+        const Pair& pr = pairs_[k];
+        const float g0 = pr.inv[0] * u + pr.inv[1] * v;
+        const float g1 = pr.inv[2] * u + pr.inv[3] * v;
+        const float score = std::min(g0, g1);
+        if (score > bestScore) {
+            bestScore = score;
+            bestIdx = k;
+            bestG[0] = g0;
+            bestG[1] = g1;
+        }
+        if (score >= -1.0e-6f) break;  // inside this arc
+    }
+
+    const Pair& pr = pairs_[bestIdx];
+    float g0 = std::max(bestG[0], 0.0f);
+    float g1 = std::max(bestG[1], 0.0f);
+    const float norm = std::sqrt(g0 * g0 + g1 * g1);
+    if (norm < 1.0e-9f) return;
+    const float inv = 1.0f / norm;
+    gains[pr.a] += g0 * inv;
+    gains[pr.b] += g1 * inv;
+}
+
 bool VbapPanner::prepare(const SpeakerLayout& layout) {
     ready_ = false;
+    planar_ = false;
     speakers_.clear();
     triplets_.clear();
+    pairs_.clear();
 
-    if (layout.size() < 3) return false;
+    if (layout.size() < 2) return false;
+    if (layout.size() > kMaxSpeakers) return false;
     speakers_.reserve(layout.size());
     for (const auto& p : layout.positions) {
         speakers_.push_back(p.toCartesian().normalized());
@@ -545,7 +677,11 @@ bool VbapPanner::prepare(const SpeakerLayout& layout) {
         }
     }
 
-    if (triplets_.empty()) return false;
+    // No valid triangle => the layout is degenerate (all speakers coplanar
+    // with the origin, e.g. a horizontal ring). Use 2D pair panning instead of
+    // failing, which is what stereo / quad / 5.1 beds need.
+    if (triplets_.empty()) return preparePlanar(layout);
+
     ready_ = true;
     return true;
 }
@@ -555,14 +691,20 @@ void VbapPanner::gainsFor(const Vec3& unitDir, float* FSX_RESTRICT gains) const 
     rt::vecClear(gains, n);
     if (!ready_) return;
 
+    if (planar_) {
+        planarGains(unitDir, gains);
+        return;
+    }
+
     const Vec3 p = unitDir.normalized();
 
-    // Find the triplet whose barycentric gains are all non-negative. Track the
-    // least-negative candidate as a fallback so a direction that falls in a
-    // numerical crack between faces still resolves.
+    // Pass 1: find the face that actually contains the direction (all
+    // barycentric gains non-negative). Track the least-negative candidate so a
+    // direction landing in a numerical crack between faces still resolves.
     std::size_t bestIdx = 0;
     float bestScore = -1.0e30f;
     float bestG[3] = {0.0f, 0.0f, 0.0f};
+    bool inside = false;
 
     for (std::size_t t = 0; t < triplets_.size(); ++t) {
         const Triplet& tri = triplets_[t];
@@ -578,7 +720,58 @@ void VbapPanner::gainsFor(const Vec3& unitDir, float* FSX_RESTRICT gains) const 
             bestG[1] = g1;
             bestG[2] = g2;
         }
-        if (score >= -1.0e-6f) break;  // inside this face; done
+        if (score >= -1.0e-6f) {  // inside this face; done
+            inside = true;
+            break;
+        }
+    }
+
+    // Pass 2: the direction lies in a HOLE of a partial layout (below a dome,
+    // under a 7.1.4 rig). Clamping the negative gains of the least-bad face and
+    // renormalising can still yield all-zero gains, which would silence the
+    // source. Instead pick the face whose clamped gain vector points closest to
+    // the requested direction -- that projects the source onto the nearest hull
+    // edge/vertex, the standard behaviour for non-full-sphere layouts.
+    if (!inside) {
+        float bestDot = -1.0e30f;
+        bool found = false;
+        for (std::size_t t = 0; t < triplets_.size(); ++t) {
+            const Triplet& tri = triplets_[t];
+            const float c0 = std::max(tri.inv[0] * p.x + tri.inv[1] * p.y + tri.inv[2] * p.z, 0.0f);
+            const float c1 = std::max(tri.inv[3] * p.x + tri.inv[4] * p.y + tri.inv[5] * p.z, 0.0f);
+            const float c2 = std::max(tri.inv[6] * p.x + tri.inv[7] * p.y + tri.inv[8] * p.z, 0.0f);
+            const float mag = std::sqrt(c0 * c0 + c1 * c1 + c2 * c2);
+            if (mag < 1.0e-9f) continue;
+
+            const Vec3 v = speakers_[tri.a] * c0 + speakers_[tri.b] * c1 + speakers_[tri.c] * c2;
+            const float vl = v.length();
+            if (vl < 1.0e-9f) continue;
+            const float score = dot(v, p) / vl;
+            if (score > bestDot) {
+                bestDot = score;
+                bestIdx = t;
+                bestG[0] = c0;
+                bestG[1] = c1;
+                bestG[2] = c2;
+                found = true;
+            }
+        }
+        // Absolutely no face can represent this direction (extremely sparse
+        // layout): fall back to the single nearest speaker so the source is
+        // still audible.
+        if (!found) {
+            std::size_t nearest = 0;
+            float nd = -1.0e30f;
+            for (std::size_t i = 0; i < n; ++i) {
+                const float s = dot(speakers_[i], p);
+                if (s > nd) {
+                    nd = s;
+                    nearest = i;
+                }
+            }
+            gains[nearest] = 1.0f;
+            return;
+        }
     }
 
     const Triplet& tri = triplets_[bestIdx];
@@ -624,8 +817,10 @@ void VbapPanner::gainsForSpread(const Vec3& unitDir, float spread,
     constexpr int kRing = 6;
 
     // Centre direction carries a reducing share as spread increases.
-    float tmp[64];
-    if (n > 64) return;
+    // `prepare()` rejects layouts above kMaxSpeakers, so this stack scratch is
+    // always large enough and the routine stays allocation-free.
+    float tmp[kMaxSpeakers];
+    if (n > kMaxSpeakers) return;
 
     gainsFor(p, gains);
     rt::vecScale(gains, 1.0f - 0.5f * s, n);
