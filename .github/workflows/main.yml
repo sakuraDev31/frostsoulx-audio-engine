@@ -1,140 +1,206 @@
-name: Build Resonance
+name: Frostsoulx Audio Engine
 
 on:
   push:
-    branches: [main,genspark ai developer]
+    branches:
+      - main
+      - genspark_ai_developer
   pull_request:
-    branches: [main,genspark ai developer]
+    branches:
+      - main
+      - genspark_ai_developer
   workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
-  JAVA_VERSION: '17'
-  ANDROID_NDK_VERSION: '28.2.13676358'
-  ANDROID_CMAKE_VERSION: '3.22.1'
-
-defaults:
-  run:
-    shell: bash
+  NDK_VERSION: "28.2.13676358"
+  CMAKE_VERSION: "3.22.1"
 
 jobs:
-  host-tests:
-    name: Reference engine host tests
+
+  # ==========================================
+  # HOST BUILD + TEST
+  # ==========================================
+  host-build:
+    name: Host Build & Tests
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
+      - name: Configure CMake
+        run: |
+          cmake -S . \
+            -B build-host \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFROSTSOULX_BUILD_TESTS=ON
 
-      - name: Install test dependencies
-        run: python -m pip install --upgrade numpy
+      - name: Build Engine
+        run: |
+          cmake --build build-host \
+            --config Release \
+            --parallel 2
 
-      - name: Run host tests
-        run: bash reference-engine/tools/run_host_tests.sh
+      - name: Run Tests
+        run: |
+          cd build-host
+          ctest --output-on-failure
 
-  build-debug-apk:
-    name: Build Resonance debug APK
+  # ==========================================
+  # ANDROID ARM64
+  # ==========================================
+  android-arm64:
+    name: Android ARM64-v8a
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-          cache: gradle
-
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: |
             platform-tools
-            platforms;android-35
-            build-tools;35.0.0
-            ndk;${{ env.ANDROID_NDK_VERSION }}
-            cmake;${{ env.ANDROID_CMAKE_VERSION }}
+            ndk;${{ env.NDK_VERSION }}
+            cmake;${{ env.CMAKE_VERSION }}
           accept-android-sdk-license: true
           log-accepted-android-sdk-licenses: false
 
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
-        env:
-          GRADLE_OPTS: -Xmx4g -Dfile.encoding=UTF-8
-
-      - name: Verify APK
+      - name: Configure ARM64
         run: |
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          sha256sum app/build/outputs/apk/debug/app-debug.apk
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          cmake -S . \
+            -B build-arm64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DFROSTSOULX_BUILD_TESTS=OFF
 
-      - name: Upload debug APK
+      - name: Build ARM64
+        run: |
+          cmake --build build-arm64 \
+            --config Release \
+            --parallel 2
+
+      - name: Package ARM64
+        run: |
+          mkdir -p dist/arm64-v8a
+          find build-arm64 -type f -name "*.so" -exec cp {} dist/arm64-v8a/ \;
+          find dist -type f -exec sha256sum {} \;
+
+      - name: Upload ARM64 Engine
         uses: actions/upload-artifact@v4
         with:
-          name: resonance-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: frostsoulx-audio-engine-arm64-v8a
+          path: dist/arm64-v8a/
           if-no-files-found: error
           retention-days: 14
 
-  build-engine-zip:
-    name: Build compiled audio engine ZIP
+  # ==========================================
+  # ANDROID x86_64
+  # ==========================================
+  android-x86_64:
+    name: Android x86_64
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: |
             platform-tools
-            platforms;android-35
-            ndk;${{ env.ANDROID_NDK_VERSION }}
-            cmake;${{ env.ANDROID_CMAKE_VERSION }}
+            ndk;${{ env.NDK_VERSION }}
+            cmake;${{ env.CMAKE_VERSION }}
           accept-android-sdk-license: true
           log-accepted-android-sdk-licenses: false
 
-      - name: Build engine for arm64-v8a and x86_64
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+      - name: Configure x86_64
         run: |
-          set -euo pipefail
-          NDK="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
-          rm -rf pkg
-          mkdir -p pkg
+          cmake -S . \
+            -B build-x86_64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=x86_64 \
+            -DANDROID_PLATFORM=android-29 \
+            -DFROSTSOULX_BUILD_TESTS=OFF
 
-          for abi in arm64-v8a x86_64; do
-            cmake -S reference-engine -B "build-$abi" \
-              -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-              -DANDROID_ABI="$abi" \
-              -DANDROID_PLATFORM=android-29 \
-              -DCMAKE_BUILD_TYPE=Release
-            cmake --build "build-$abi" --parallel
-            mkdir -p "pkg/lib/$abi"
-            cp "build-$abi/libref_engine.so" "pkg/lib/$abi/libref_engine.so"
-          done
+      - name: Build x86_64
+        run: |
+          cmake --build build-x86_64 \
+            --config Release \
+            --parallel 2
 
-          cp reference-engine/manifest.json pkg/manifest.json
-          (cd pkg && zip -qr ../resonance-reference-engine.zip .)
-          unzip -l resonance-reference-engine.zip
-          sha256sum resonance-reference-engine.zip
+      - name: Package x86_64
+        run: |
+          mkdir -p dist/x86_64
+          find build-x86_64 -type f -name "*.so" -exec cp {} dist/x86_64/ \;
+          find dist -type f -exec sha256sum {} \;
 
-      - name: Upload compiled engine ZIP
+      - name: Upload x86_64 Engine
         uses: actions/upload-artifact@v4
         with:
-          name: resonance-reference-engine
-          path: resonance-reference-engine.zip
+          name: frostsoulx-audio-engine-x86_64
+          path: dist/x86_64/
           if-no-files-found: error
           retention-days: 14
+
+  # ==========================================
+  # COMBINED ENGINE PACKAGE
+  # ==========================================
+  package-engine:
+    name: Package Audio Engine
+    runs-on: ubuntu-latest
+    needs:
+      - android-arm64
+      - android-x86_64
+
+    steps:
+      - name: Download ARM64
+        uses: actions/download-artifact@v4
+        with:
+          name: frostsoulx-audio-engine-arm64-v8a
+          path: package/lib/arm64-v8a
+
+      - name: Download x86_64
+        uses: actions/download-artifact@v4
+        with:
+          name: frostsoulx-audio-engine-x86_64
+          path: package/lib/x86_64
+
+      - name: Create manifest
+        run: |
+          cat > package/manifest.json <<'EOF'
+          {
+            "name": "Frostsoulx Audio Engine",
+            "version": "1.0.0",
+            "platform": "android",
+            "architectures": [
+              "arm64-v8a",
+              "x86_64"
+            ],
+            "build_type": "Release"
+          }
+          EOF
+
+      - name: Package ZIP
+        run: |
+          cd package
+          zip -qr ../frostsoulx-audio-engine.zip .
+          cd ..
+          sha256sum frostsoulx-audio-engine.zip
+          unzip -l frostsoulx-audio-engine.zip
+
+      - name: Upload Final Engine
+        uses: actions/upload-artifact@v4
+        with:
+          name: frostsoulx-audio-engine
+          path: frostsoulx-audio-engine.zip
+          if-no-files-found: error
+          retention-days: 30
