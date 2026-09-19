@@ -1,0 +1,19 @@
+Start testing: Sep 19 21:33 UTC
+----------------------------------------------------------
+1/1 Testing: frostsoulx_immersive_audio_tests
+1/1 Test: frostsoulx_immersive_audio_tests
+Command: "/home/user/webapp/build-host/frostsoulx_immersive_audio_tests"
+Directory: /home/user/webapp/build-host
+"frostsoulx_immersive_audio_tests" start time: Sep 19 21:33 UTC
+Output:
+----------------------------------------------------------
+All immersive audio engine checks passed (native path: PCM -> SpatialRenderer -> HRTF/HOA/VBAP -> room -> limiter)
+<end of output>
+Test time =   0.23 sec
+----------------------------------------------------------
+Test Passed.
+"frostsoulx_immersive_audio_tests" end time: Sep 19 21:33 UTC
+"frostsoulx_immersive_audio_tests" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Sep 19 21:33 UTC

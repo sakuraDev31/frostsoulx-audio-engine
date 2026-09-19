@@ -418,10 +418,14 @@ void AmbisonicRotator::setOrientation(const HeadOrientation& o) noexcept {
     if (identity_) return;
 
     const float cy = std::cos(y), sy = std::sin(y);
-    const float cp = std::cos(p), sp = std::sin(p);
+    // +Y is LEFT, so a right-handed rotation about +Y by a positive angle
+    // points the nose DOWN. `HeadOrientation::pitchDeg` is documented as
+    // positive = look UP, so the pitch term is negated here. This must stay in
+    // lock-step with `ListenerFrame::rebuild()`.
+    const float cp = std::cos(p), sp = -std::sin(p);
     const float cr = std::cos(r), sr = std::sin(r);
 
-    // Head-to-world rotation R = Rz(yaw) * Ry(pitch) * Rx(roll); its columns are
+    // Head-to-world rotation R = Rz(yaw) * Ry(-pitch) * Rx(roll); its columns are
     // the listener's forward/left/up axes, exactly as `ListenerFrame` builds them.
     const Vec3 fwd{cy * cp, sy * cp, -sp};
     const Vec3 left{cy * sp * sr - sy * cr, sy * sp * sr + cy * cr, cp * sr};
@@ -597,7 +601,28 @@ void VbapPanner::planarGains(const Vec3& unitDir, float* FSX_RESTRICT gains) con
     float g0 = std::max(bestG[0], 0.0f);
     float g1 = std::max(bestG[1], 0.0f);
     const float norm = std::sqrt(g0 * g0 + g1 * g1);
-    if (norm < 1.0e-9f) return;
+    if (norm < 1.0e-9f) {
+        // PARTIAL ring (stereo pair, front-only bar, any arc that does not
+        // close the circle): the direction lies in the uncovered gap, so both
+        // pair gains clamp to zero. Project onto the nearest boundary speaker
+        // instead of emitting silence -- the same rule the 3D path applies to
+        // holes in a non-full-sphere hull.
+        std::size_t nearest = 0;
+        float bestDot = -2.0f;
+        for (std::size_t i = 0; i < speakers_.size(); ++i) {
+            const float su = dot(speakers_[i], planeU_);
+            const float sv = dot(speakers_[i], planeV_);
+            const float sl = std::sqrt(su * su + sv * sv);
+            if (sl < 1.0e-6f) continue;
+            const float d = (u * su + v * sv) / sl;
+            if (d > bestDot) {
+                bestDot = d;
+                nearest = i;
+            }
+        }
+        if (bestDot > -2.0f) gains[nearest] += 1.0f;
+        return;
+    }
     const float inv = 1.0f / norm;
     gains[pr.a] += g0 * inv;
     gains[pr.b] += g1 * inv;

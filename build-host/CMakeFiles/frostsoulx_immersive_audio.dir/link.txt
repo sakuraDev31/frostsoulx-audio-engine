@@ -1,0 +1,2 @@
+/usr/bin/ar qc libfrostsoulx_immersive_audio.a CMakeFiles/frostsoulx_immersive_audio.dir/src/immersive_audio_engine.cpp.o CMakeFiles/frostsoulx_immersive_audio.dir/src/dsp/partitioned_convolver.cpp.o CMakeFiles/frostsoulx_immersive_audio.dir/src/spatial/ambisonics.cpp.o CMakeFiles/frostsoulx_immersive_audio.dir/src/spatial/hrtf.cpp.o CMakeFiles/frostsoulx_immersive_audio.dir/src/spatial/spatial_renderer.cpp.o
+/usr/bin/ranlib libfrostsoulx_immersive_audio.a

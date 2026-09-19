@@ -299,18 +299,26 @@ struct ImmersiveAudioEngine::Impl {
         limiterGain = 1.0f;
     }
 
-    void release() noexcept {
+    void releaseSteamAudio() noexcept {
 #if defined(FROSTSOULX_STEAM_AUDIO_AVAILABLE)
         if (effect != nullptr) {
             iplBinauralEffectRelease(&effect);
+            effect = nullptr;
         }
         if (hrtf != nullptr) {
             iplHRTFRelease(&hrtf);
+            hrtf = nullptr;
         }
         if (context != nullptr) {
             iplContextRelease(&context);
+            context = nullptr;
         }
 #endif
+    }
+
+    void release() noexcept {
+        releaseSteamAudio();
+        backend = SpatialBackend::None;
         prepared = false;
         sampleRate = 0;
         maxFrames = 0;
@@ -415,6 +423,65 @@ struct ImmersiveAudioEngine::Impl {
         if (std::fabs(right) < kZeroEpsilon) right = 0.0f;
     }
 
+    /// Native spatial path: sanitise -> SpatialRenderer (HOA encode -> HOA
+    /// rotation -> HRTF/HRIR partitioned convolution, with VBAP available for
+    /// object/discrete panning) -> room processing -> safety limiter.
+    ///
+    /// Real-time safe: operates in place on the caller's interleaved buffer
+    /// and on storage reserved by prepare(). No allocation, locking, I/O or
+    /// logging.
+    bool processNative(float* interleavedStereo, int frames) noexcept {
+        if (!nativeRenderer.ready()) {
+            lastResult = ImmersiveProcessResult::SteamAudioUnavailable;
+            return false;
+        }
+
+        const std::size_t samples = static_cast<std::size_t>(frames) * 2u;
+
+        // 1. Sanitise in place so no NaN/Inf ever reaches the convolver state.
+        for (std::size_t i = 0; i < samples; ++i) {
+            interleavedStereo[i] = sanitizeInputSample(interleavedStereo[i]);
+        }
+
+        // 2. Spatialise in place. The renderer owns its own block adapter, so
+        //    `frames` may be any value in [1, maxFrames]; it applies the
+        //    delay-matched dry/wet spatial blend and its own unity-gain
+        //    normalisation, so no extra headroom trim is needed here (that
+        //    keeps blend=0 + room Off bit-transparent apart from latency).
+        nativeRenderer.process(interleavedStereo, frames);
+
+        // 3. Room processing, then the safety limiter as the final stage.
+        for (int frame = 0; frame < frames; ++frame) {
+            const std::size_t li = static_cast<std::size_t>(frame) * 2u;
+            float outL = interleavedStereo[li];
+            float outR = interleavedStereo[li + 1];
+
+            if (!std::isfinite(outL) || !std::isfinite(outR)) {
+                lastResult = ImmersiveProcessResult::InvalidOutput;
+                return false;
+            }
+
+            applyRoomModel(outL, outR);
+            applyOutputLimiter(outL, outR);
+
+            if (!std::isfinite(outL) || !std::isfinite(outR)) {
+                lastResult = ImmersiveProcessResult::InvalidOutput;
+                return false;
+            }
+
+            interleavedStereo[li] = outL;
+            interleavedStereo[li + 1] = outR;
+        }
+
+        // Note: unlike the Steam Audio path there is deliberately no
+        // "input energy implies output energy" check here. The renderer has
+        // one block of algorithmic latency (`latencySamples()`), so the first
+        // block after prepare()/reset() is legitimately silent.
+        lastState = 0;
+        lastResult = ImmersiveProcessResult::NativeSpatialProcessed;
+        return true;
+    }
+
     SpaceDesignControls currentSpaceDesignControls() const noexcept {
         return SpaceDesignControls{roomSizeNorm, dampeningNorm, widthNorm};
     }
@@ -462,43 +529,62 @@ bool ImmersiveAudioEngine::prepare(int sampleRate, int maxFrames) noexcept {
         }
     }
 
+    impl_->backend = nativeReady ? SpatialBackend::Native : SpatialBackend::None;
+
 #if defined(FROSTSOULX_STEAM_AUDIO_AVAILABLE)
-    IPLContextSettings contextSettings{};
-    contextSettings.version = STEAMAUDIO_VERSION;
-    if (iplContextCreate(&contextSettings, &impl_->context) != IPL_STATUS_SUCCESS || impl_->context == nullptr) {
-        impl_->release();
-        return false;
-    }
+    // Try Steam Audio. If any stage fails we tear down only the Steam objects
+    // and keep running on the native renderer — a missing/!broken libphonon is
+    // not a reason to fail closed when the built-in spatialiser is ready.
+    const bool steamReady = [&]() noexcept {
+        IPLContextSettings contextSettings{};
+        contextSettings.version = STEAMAUDIO_VERSION;
+        if (iplContextCreate(&contextSettings, &impl_->context) != IPL_STATUS_SUCCESS || impl_->context == nullptr) {
+            return false;
+        }
 
-    IPLAudioSettings audioSettings{};
-    audioSettings.samplingRate = sampleRate;
-    // Steam Audio effects use a fixed frame size; process() pads/splits
-    // variable Media3 blocks before applying the effect.
-    audioSettings.frameSize = Impl::kSteamAudioFrameSize;
+        IPLAudioSettings audioSettings{};
+        audioSettings.samplingRate = sampleRate;
+        // Steam Audio effects use a fixed frame size; process() pads/splits
+        // variable Media3 blocks before applying the effect.
+        audioSettings.frameSize = Impl::kSteamAudioFrameSize;
 
-    IPLHRTFSettings hrtfSettings{};
-    hrtfSettings.type = IPL_HRTFTYPE_DEFAULT;
-    hrtfSettings.volume = 1.0f;
-    if (iplHRTFCreate(impl_->context, &audioSettings, &hrtfSettings, &impl_->hrtf) != IPL_STATUS_SUCCESS || impl_->hrtf == nullptr) {
-        impl_->release();
-        return false;
-    }
+        IPLHRTFSettings hrtfSettings{};
+        hrtfSettings.type = IPL_HRTFTYPE_DEFAULT;
+        hrtfSettings.volume = 1.0f;
+        if (iplHRTFCreate(impl_->context, &audioSettings, &hrtfSettings, &impl_->hrtf) != IPL_STATUS_SUCCESS || impl_->hrtf == nullptr) {
+            return false;
+        }
 
-    IPLBinauralEffectSettings effectSettings{};
-    effectSettings.hrtf = impl_->hrtf;
-    if (iplBinauralEffectCreate(impl_->context, &audioSettings, &effectSettings, &impl_->effect) != IPL_STATUS_SUCCESS || impl_->effect == nullptr) {
-        impl_->release();
-        return false;
+        IPLBinauralEffectSettings effectSettings{};
+        effectSettings.hrtf = impl_->hrtf;
+        if (iplBinauralEffectCreate(impl_->context, &audioSettings, &effectSettings, &impl_->effect) != IPL_STATUS_SUCCESS || impl_->effect == nullptr) {
+            return false;
+        }
+        return true;
+    }();
+
+    if (steamReady) {
+        impl_->backend = SpatialBackend::SteamAudio;
+    } else {
+        impl_->releaseSteamAudio();
+        if (!nativeReady) {
+            impl_->release();
+            return false;
+        }
+        impl_->backend = SpatialBackend::Native;
     }
-    impl_->backend = SpatialBackend::SteamAudio;
 #else
     // No Steam Audio: run the built-in renderer rather than failing closed.
     if (!nativeReady) {
         impl_->release();
         return false;
     }
-    impl_->backend = SpatialBackend::Native;
 #endif
+
+    if (impl_->backend == SpatialBackend::None) {
+        impl_->release();
+        return false;
+    }
 
     impl_->prepared = true;
     impl_->lastResult = ImmersiveProcessResult::Disabled;
@@ -511,6 +597,7 @@ void ImmersiveAudioEngine::reset() noexcept {
         iplBinauralEffectReset(impl_->effect);
     }
 #endif
+    impl_->nativeRenderer.reset();
     impl_->clearStateOnly();
     impl_->lastResult = impl_->prepared ? ImmersiveProcessResult::Disabled : ImmersiveProcessResult::NotPrepared;
     impl_->lastState = -1;
@@ -525,6 +612,28 @@ void ImmersiveAudioEngine::setEnabled(bool enabled) noexcept {
 
 void ImmersiveAudioEngine::setSpatialBlend(float blend) noexcept {
     impl_->spatialBlend = std::isfinite(blend) ? std::clamp(blend, 0.0f, 1.0f) : 0.0f;
+    // The native renderer performs its own delay-matched dry/wet crossfade.
+    impl_->nativeRenderer.setSpatialBlend(impl_->spatialBlend);
+}
+
+void ImmersiveAudioEngine::setHeadOrientation(float yawDeg, float pitchDeg, float rollDeg) noexcept {
+    spatial::HeadOrientation o;
+    o.yawDeg = std::isfinite(yawDeg) ? yawDeg : 0.0f;
+    o.pitchDeg = std::isfinite(pitchDeg) ? pitchDeg : 0.0f;
+    o.rollDeg = std::isfinite(rollDeg) ? rollDeg : 0.0f;
+    impl_->nativeRenderer.setHeadOrientation(o);
+}
+
+SpatialBackend ImmersiveAudioEngine::backend() const noexcept {
+    return impl_->backend;
+}
+
+int ImmersiveAudioEngine::latencySamples() const noexcept {
+    if (!impl_->prepared) return 0;
+    if (impl_->backend == SpatialBackend::Native) {
+        return static_cast<int>(impl_->nativeRenderer.latencySamples());
+    }
+    return 0;
 }
 
 void ImmersiveAudioEngine::setRoomSimulationPreset(RoomSimulationPreset preset) noexcept {
@@ -559,6 +668,7 @@ void ImmersiveAudioEngine::setDampening(float dampening) noexcept {
 
 void ImmersiveAudioEngine::setStereoWidth(float width) noexcept {
     impl_->widthNorm = clampUnit(width);
+    impl_->nativeRenderer.setStereoWidth(impl_->widthNorm);
     impl_->updateRoomModel();
 }
 
@@ -596,7 +706,17 @@ bool ImmersiveAudioEngine::process(float* interleavedStereo, int frames) noexcep
         return false;
     }
 
+    // Native backend: built-in HOA/HRTF renderer -> room -> limiter.
+    if (impl_->backend == SpatialBackend::Native) {
+        return impl_->processNative(interleavedStereo, frames);
+    }
+
 #if defined(FROSTSOULX_STEAM_AUDIO_AVAILABLE)
+    if (impl_->backend != SpatialBackend::SteamAudio || impl_->effect == nullptr) {
+        impl_->lastResult = ImmersiveProcessResult::SteamAudioUnavailable;
+        return false;
+    }
+
     bool anyInputEnergy = false;
     bool anyOutputEnergy = false;
     int frameOffset = 0;
@@ -631,6 +751,14 @@ bool ImmersiveAudioEngine::process(float* interleavedStereo, int frames) noexcep
         const IPLAudioEffectState state = iplBinauralEffectApply(impl_->effect, &params, &input, &output);
         impl_->lastState = static_cast<int>(state);
         if (state != IPL_AUDIOEFFECTSTATE_TAILCOMPLETE && state != IPL_AUDIOEFFECTSTATE_TAILREMAINING) {
+            // Steam Audio stopped working at runtime. Hand the remaining and
+            // all subsequent blocks to the built-in renderer rather than
+            // dropping spatialisation entirely.
+            if (impl_->nativeRenderer.ready()) {
+                impl_->backend = SpatialBackend::Native;
+                return impl_->processNative(interleavedStereo + static_cast<std::size_t>(frameOffset) * 2u,
+                                            frames - frameOffset);
+            }
             impl_->lastResult = ImmersiveProcessResult::SteamAudioUnavailable;
             return false;
         }
@@ -679,6 +807,8 @@ bool ImmersiveAudioEngine::process(float* interleavedStereo, int frames) noexcep
     impl_->lastResult = ImmersiveProcessResult::SteamAudioProcessed;
     return true;
 #else
+    // Prepared with no usable backend: should be unreachable because
+    // prepare() fails when neither backend initialises.
     impl_->lastResult = ImmersiveProcessResult::SteamAudioUnavailable;
     return false;
 #endif

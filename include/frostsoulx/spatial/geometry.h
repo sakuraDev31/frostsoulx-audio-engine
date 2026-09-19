@@ -160,10 +160,13 @@ private:
         const float r = orientation_.rollDeg * rt::kDegToRad;
 
         const float cy = std::cos(y), sy = std::sin(y);
-        const float cp = std::cos(p), sp = std::sin(p);
+        // +Y is LEFT in this frame, so a right-handed rotation about +Y by a
+        // positive angle tilts the nose DOWN. `pitchDeg` is defined as
+        // positive = look UP, hence Ry(-pitch).
+        const float cp = std::cos(p), sp = -std::sin(p);
         const float cr = std::cos(r), sr = std::sin(r);
 
-        // R = Rz(yaw) * Ry(pitch) * Rx(roll), columns are the head axes.
+        // R = Rz(yaw) * Ry(-pitch) * Rx(roll), columns are the head axes.
         fwd_ = {cy * cp, sy * cp, -sp};
         left_ = {cy * sp * sr - sy * cr, sy * sp * sr + cy * cr, cp * sr};
         up_ = {cy * sp * cr + sy * sr, sy * sp * cr - cy * sr, cp * cr};

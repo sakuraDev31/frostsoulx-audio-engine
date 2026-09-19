@@ -1,0 +1,5 @@
+/home/user/webapp/build-host/CMakeFiles/frostsoulx_immersive_audio.dir
+/home/user/webapp/build-host/CMakeFiles/frostsoulx_immersive_audio_tests.dir
+/home/user/webapp/build-host/CMakeFiles/test.dir
+/home/user/webapp/build-host/CMakeFiles/edit_cache.dir
+/home/user/webapp/build-host/CMakeFiles/rebuild_cache.dir
