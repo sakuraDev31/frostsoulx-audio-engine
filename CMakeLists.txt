@@ -11,14 +11,21 @@ option(FROSTSOULX_USE_STEAM_AUDIO
 option(FROSTSOULX_BUILD_TESTS
     "Build host-side engine tests"
     ON)
+option(FROSTSOULX_BUILD_PLUGIN
+    "Build the DSP Lab six-function ABI shared plugin"
+    OFF)
 
-add_library(frostsoulx_immersive_audio STATIC
+set(FROSTSOULX_ENGINE_SOURCES
     src/immersive_audio_engine.cpp
     src/dsp/partitioned_convolver.cpp
     src/spatial/ambisonics.cpp
     src/spatial/hrtf.cpp
     src/spatial/spatial_renderer.cpp
 )
+
+add_library(frostsoulx_immersive_audio STATIC ${FROSTSOULX_ENGINE_SOURCES})
+set_target_properties(frostsoulx_immersive_audio PROPERTIES
+    POSITION_INDEPENDENT_CODE ON)
 target_include_directories(frostsoulx_immersive_audio PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
@@ -45,6 +52,22 @@ if(FROSTSOULX_USE_STEAM_AUDIO)
     target_link_libraries(frostsoulx_immersive_audio PRIVATE phonon)
 endif()
 
+if(FROSTSOULX_BUILD_PLUGIN)
+    add_library(frostsoulx_audio_plugin SHARED src/ae_plugin.cpp)
+    set_target_properties(frostsoulx_audio_plugin PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "audio"
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON)
+    target_include_directories(frostsoulx_audio_plugin PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/engine-sdk)
+    target_link_libraries(frostsoulx_audio_plugin PRIVATE
+        frostsoulx_immersive_audio)
+    target_compile_features(frostsoulx_audio_plugin PRIVATE cxx_std_17)
+    target_compile_options(frostsoulx_audio_plugin PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+endif()
+
 if(FROSTSOULX_BUILD_TESTS)
     enable_testing()
     add_executable(frostsoulx_immersive_audio_tests
@@ -53,4 +76,15 @@ if(FROSTSOULX_BUILD_TESTS)
         frostsoulx_immersive_audio)
     add_test(NAME frostsoulx_immersive_audio_tests
         COMMAND frostsoulx_immersive_audio_tests)
+
+    if(FROSTSOULX_BUILD_PLUGIN)
+        add_executable(frostsoulx_abi_plugin_tests
+            tests/test_ae_plugin.cpp)
+        target_include_directories(frostsoulx_abi_plugin_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/engine-sdk)
+        target_link_libraries(frostsoulx_abi_plugin_tests PRIVATE
+            frostsoulx_audio_plugin)
+        add_test(NAME frostsoulx_abi_plugin_tests
+            COMMAND frostsoulx_abi_plugin_tests)
+    endif()
 endif()
