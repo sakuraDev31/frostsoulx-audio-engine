@@ -56,7 +56,7 @@ if(FROSTSOULX_BUILD_PLUGIN)
     add_library(frostsoulx_audio_plugin SHARED src/ae_plugin.cpp)
     set_target_properties(frostsoulx_audio_plugin PROPERTIES
         PREFIX ""
-        OUTPUT_NAME "audio"
+        OUTPUT_NAME "libfrostsoulx_immersive_audio"
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON)
     target_include_directories(frostsoulx_audio_plugin PRIVATE

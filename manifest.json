@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "description": "Native FrostSoulX HOA/HRTF spatial engine with room simulation and safety limiting.",
-  "entry": "audio.so",
+  "entry": "libfrostsoulx_immersive_audio.so",
   "preload": [],
   "params": [
     { "id": "enabled", "label": "Engine enabled", "group": "Engine", "type": "toggle", "default": 1 },
