@@ -36,6 +36,7 @@ jobs:
           cmake -S . \
             -B build-host \
             -DCMAKE_BUILD_TYPE=Release \
+            -DFROSTSOULX_BUILD_PLUGIN=ON \
             -DFROSTSOULX_BUILD_TESTS=ON
 
       - name: Build Engine
@@ -60,24 +61,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            ndk;${{ env.NDK_VERSION }}
-            cmake;${{ env.CMAKE_VERSION }}
-          accept-android-sdk-license: true
-          log-accepted-android-sdk-licenses: false
+      - name: Setup Android NDK
+        run: |
+          NDK_PATH=""
+          if [ -d "$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" ]; then
+            NDK_PATH="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          elif [ -n "$ANDROID_NDK_LATEST_HOME" ] && [ -d "$ANDROID_NDK_LATEST_HOME" ]; then
+            NDK_PATH="$ANDROID_NDK_LATEST_HOME"
+          elif [ -n "$ANDROID_NDK_HOME" ] && [ -d "$ANDROID_NDK_HOME" ]; then
+            NDK_PATH="$ANDROID_NDK_HOME"
+          elif [ -d "$ANDROID_HOME/ndk" ]; then
+            NDK_PATH=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n 1)
+          fi
+          if [ -z "$NDK_PATH" ] || [ ! -d "$NDK_PATH" ]; then
+            echo "Installing NDK ${{ env.NDK_VERSION }} via sdkmanager..."
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;${{ env.NDK_VERSION }}"
+            NDK_PATH="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          fi
+          echo "Selected Android NDK: $NDK_PATH"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          echo "ANDROID_NDK_LATEST_HOME=$NDK_PATH" >> $GITHUB_ENV
 
       - name: Configure ARM64
         run: |
           cmake -S . \
             -B build-arm64 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-29 \
+            -DFROSTSOULX_BUILD_PLUGIN=ON \
             -DFROSTSOULX_BUILD_TESTS=OFF
 
       - name: Build ARM64
@@ -111,24 +125,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            ndk;${{ env.NDK_VERSION }}
-            cmake;${{ env.CMAKE_VERSION }}
-          accept-android-sdk-license: true
-          log-accepted-android-sdk-licenses: false
+      - name: Setup Android NDK
+        run: |
+          NDK_PATH=""
+          if [ -d "$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" ]; then
+            NDK_PATH="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          elif [ -n "$ANDROID_NDK_LATEST_HOME" ] && [ -d "$ANDROID_NDK_LATEST_HOME" ]; then
+            NDK_PATH="$ANDROID_NDK_LATEST_HOME"
+          elif [ -n "$ANDROID_NDK_HOME" ] && [ -d "$ANDROID_NDK_HOME" ]; then
+            NDK_PATH="$ANDROID_NDK_HOME"
+          elif [ -d "$ANDROID_HOME/ndk" ]; then
+            NDK_PATH=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n 1)
+          fi
+          if [ -z "$NDK_PATH" ] || [ ! -d "$NDK_PATH" ]; then
+            echo "Installing NDK ${{ env.NDK_VERSION }} via sdkmanager..."
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;${{ env.NDK_VERSION }}"
+            NDK_PATH="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          fi
+          echo "Selected Android NDK: $NDK_PATH"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          echo "ANDROID_NDK_LATEST_HOME=$NDK_PATH" >> $GITHUB_ENV
 
       - name: Configure x86_64
         run: |
           cmake -S . \
             -B build-x86_64 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=x86_64 \
             -DANDROID_PLATFORM=android-29 \
+            -DFROSTSOULX_BUILD_PLUGIN=ON \
             -DFROSTSOULX_BUILD_TESTS=OFF
 
       - name: Build x86_64
