@@ -295,7 +295,7 @@ HrirPair HrtfDatabase::render(const SphericalCoord& dir,
 
     // Grid coordinates.
     const float azPos = az / azStep_;
-    const float elPos = (el + 90.0f) / elStep_;
+    const float elPos = std::max(0.0f, (el + 90.0f) / elStep_);
 
     std::size_t az0 = static_cast<std::size_t>(azPos) % numAz_;
     std::size_t az1 = (az0 + 1) % numAz_;

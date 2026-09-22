@@ -3,6 +3,10 @@
 #include <cstddef>
 #include <memory>
 
+#include "frostsoulx/spatial/rir_generator.h"
+#include "frostsoulx/spatial/space_profile.h"
+#include "frostsoulx/spatial/spatial_source.h"
+
 namespace frostsoulx {
 
 enum class ImmersiveProcessResult {
@@ -15,13 +19,16 @@ enum class ImmersiveProcessResult {
     /// Processed by the built-in HOA/HRTF spatial renderer. Reported when the
     /// Steam Audio backend is not compiled in or failed to initialise.
     NativeSpatialProcessed,
+    /// Processed by the full-partitioned linear convolution acoustic space engine.
+    FullConvolutionProcessed,
 };
 
 /// Which spatialiser `process()` is currently driving.
 enum class SpatialBackend {
-    None,        ///< not prepared
-    SteamAudio,  ///< vendored Steam Audio binaural effect
-    Native,      ///< built-in HOA encode -> rotate -> HRTF convolution
+    None,            ///< not prepared
+    SteamAudio,      ///< vendored Steam Audio binaural effect
+    Native,          ///< built-in HOA encode -> rotate -> HRTF convolution (low-device fallback)
+    FullConvolution, ///< Full physical room acoustic BRIR partitioned linear convolution
 };
 
 enum class RoomSimulationPreset {
@@ -85,6 +92,25 @@ public:
     int latencySamples() const noexcept;
 
     bool process(float* interleavedStereo, int frames) noexcept;
+
+    // -------------------------------------------------------------------------
+    // True Acoustic Space & Full Partitioned Convolution API (Stage 4 & Stage 7)
+    // -------------------------------------------------------------------------
+    void setSpatialBackendPreference(SpatialBackend backend) noexcept;
+    void setSpacePreset(spatial::SpaceProfile::Preset preset) noexcept;
+    void setSpaceProfile(const spatial::SpaceProfile& profile) noexcept;
+    void setRoomDimensions(float x, float y, float z) noexcept;
+    void setBoundaryMaterial(spatial::RoomSurface surface, const spatial::AcousticMaterial& material) noexcept;
+    void setSourcePosition(float x, float y, float z) noexcept; // User coords: X=right/left, Y=up/down, Z=front/back
+    void setListenerPosition(float x, float y, float z) noexcept;
+    void setListenerOrientation(float yawDeg, float pitchDeg, float rollDeg) noexcept;
+    void setSourceTrajectory(const spatial::SourceTrajectory& trajectory) noexcept;
+    void setTrajectoryPosition(float timeSeconds) noexcept;
+    void setIrLength(std::size_t taps) noexcept;
+    void setReflectionDensity(float density) noexcept;
+
+    const spatial::SpaceProfile& activeSpaceProfile() const noexcept;
+    const spatial::StereoBrir& activeBrir() const noexcept;
 
 private:
     struct Impl;

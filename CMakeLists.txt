@@ -21,6 +21,9 @@ set(FROSTSOULX_ENGINE_SOURCES
     src/spatial/ambisonics.cpp
     src/spatial/hrtf.cpp
     src/spatial/spatial_renderer.cpp
+    src/spatial/space_profile.cpp
+    src/spatial/rir_generator.cpp
+    src/spatial/spatial_source.cpp
 )
 
 add_library(frostsoulx_immersive_audio STATIC ${FROSTSOULX_ENGINE_SOURCES})
@@ -76,6 +79,20 @@ if(FROSTSOULX_BUILD_TESTS)
         frostsoulx_immersive_audio)
     add_test(NAME frostsoulx_immersive_audio_tests
         COMMAND frostsoulx_immersive_audio_tests)
+
+    add_executable(frostsoulx_space_acoustics_tests
+        tests/test_space_acoustics.cpp)
+    target_link_libraries(frostsoulx_space_acoustics_tests PRIVATE
+        frostsoulx_immersive_audio)
+    add_test(NAME frostsoulx_space_acoustics_tests
+        COMMAND frostsoulx_space_acoustics_tests)
+
+    add_executable(frostsoulx_space_acoustics_full_tests
+        tests/test_space_acoustics_full.cpp)
+    target_link_libraries(frostsoulx_space_acoustics_full_tests PRIVATE
+        frostsoulx_immersive_audio)
+    add_test(NAME frostsoulx_space_acoustics_full_tests
+        COMMAND frostsoulx_space_acoustics_full_tests)
 
     if(FROSTSOULX_BUILD_PLUGIN)
         add_executable(frostsoulx_abi_plugin_tests
