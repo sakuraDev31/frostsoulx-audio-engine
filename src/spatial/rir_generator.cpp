@@ -1,5 +1,5 @@
 #include "frostsoulx/spatial/rir_generator.h"
-#include "frostsoulx/dsp/fft.h"
+#include "frostsoulx/spatial/ambisonics.h"
 #include "frostsoulx/rt/rt_types.h"
 
 #include <algorithm>
@@ -69,10 +69,10 @@ std::vector<GeometricReflectionPath> RirGenerator::calculateReflectionPaths(cons
     // Narrow dimensions (e.g. Tunnel width/height, Car cabin) produce rapid transversal
     // bounces before longitudinal sound travels far. We scale maximum order adaptively per axis
     // to capture true waveguide flutter without calculating millions of redundant paths.
-    const int maxOrderX = std::clamp(static_cast<int>(80.0f / std::max(dims.x, 2.0f)), 1, 3);
-    const int maxOrderY = std::clamp(static_cast<int>(50.0f / std::max(dims.y, 1.2f)), 1, 5);
-    const int maxOrderZ = std::clamp(static_cast<int>(40.0f / std::max(dims.z, 1.0f)), 1, 4);
-    const int maxOrderTotal = std::max({maxOrderX, maxOrderY, maxOrderZ, cfg_.maxIsmOrder});
+    const int maxOrderX = std::min(maxOrder, std::clamp(static_cast<int>(80.0f / std::max(dims.x, 2.0f)), 1, 3));
+    const int maxOrderY = std::min(maxOrder, std::clamp(static_cast<int>(50.0f / std::max(dims.y, 1.2f)), 1, 5));
+    const int maxOrderZ = std::min(maxOrder, std::clamp(static_cast<int>(40.0f / std::max(dims.z, 1.0f)), 1, 4));
+    const int maxOrderTotal = maxOrder;
 
     for (int mx = -maxOrderX; mx <= maxOrderX; ++mx) {
         for (int my = -maxOrderY; my <= maxOrderY; ++my) {
@@ -207,7 +207,7 @@ StereoBrir RirGenerator::generateBrir(const SpaceProfile& space, const HrtfDatab
 
     for (const auto& path : paths) {
         const float delaySamples = path.delaySeconds * fs;
-        if (delaySamples >= static_cast<float>(cfg_.maxTaps - hrirTaps)) {
+        if (!std::isfinite(delaySamples) || delaySamples >= static_cast<float>(cfg_.maxTaps)) {
             continue;
         }
 
@@ -232,17 +232,19 @@ StereoBrir RirGenerator::generateBrir(const SpaceProfile& space, const HrtfDatab
 
         const std::size_t baseIdx = static_cast<std::size_t>(delaySamples);
         const float frac = delaySamples - static_cast<float>(baseIdx);
-        const float gain = path.broadbandGain;
+        const float gain = path.broadbandGain * (path.order == 0 ? 1.0f : rt::clampUnit(cfg_.reflectionGain));
 
         for (std::size_t t = 0; t < hrirTaps; ++t) {
             const std::size_t outIdx = baseIdx + t;
-            if (outIdx + 1 < cfg_.maxTaps) {
+            if (outIdx < cfg_.maxTaps) {
                 const float sl = hrirL[t] * gain;
                 const float sr = hrirR[t] * gain;
                 brir.left[outIdx] += sl * (1.0f - frac);
-                brir.left[outIdx + 1] += sl * frac;
                 brir.right[outIdx] += sr * (1.0f - frac);
-                brir.right[outIdx + 1] += sr * frac;
+                if (outIdx + 1 < cfg_.maxTaps) {
+                    brir.left[outIdx + 1] += sl * frac;
+                    brir.right[outIdx + 1] += sr * frac;
+                }
             }
         }
     }
@@ -259,7 +261,8 @@ StereoBrir RirGenerator::generateBrir(const SpaceProfile& space, const HrtfDatab
         const std::size_t startSample = static_cast<std::size_t>(tMix * fs);
 
         // Sabine/Eyring T60 per band (Low: 125-250Hz, Mid: 500-1000Hz, High: 2000-4000Hz)
-        const auto t60Bands = space.reverberationTimeT60();
+        auto t60Bands = space.reverberationTimeT60();
+        for (float& t60 : t60Bands) t60 *= std::clamp(cfg_.reverbTimeScale, 0.1f, 8.0f);
         const float t60Low = std::clamp(0.5f * (t60Bands[0] + t60Bands[1]), 0.10f, 15.0f);
         const float t60Mid = std::clamp(0.5f * (t60Bands[2] + t60Bands[3]), 0.10f, 15.0f);
         const float t60High = std::clamp(0.5f * (t60Bands[4] + t60Bands[5]), 0.05f, 10.0f);
@@ -278,6 +281,18 @@ StereoBrir RirGenerator::generateBrir(const SpaceProfile& space, const HrtfDatab
         const float hfRatio = std::clamp(t60High / t60Mid, 0.10f, 1.0f);
         const float dampCoeff = std::clamp(std::exp(-1.0f / (0.003f * hfRatio * fs)), 0.05f, 0.98f);
 
+        // Internal first-order diffuse-field model (ACN/SN3D W,Y,Z,X).
+        // Decode the same stochastic sound field at the two world-space ear
+        // axes. W is coherent; max-rE directional components supply binaural
+        // decorrelation. Room aspect ratio controls anisotropy (e.g. a tunnel).
+        ListenerFrame frame;
+        frame.setOrientation(space.listenerOrientation());
+        std::array<float, 4> shL{}, shR{};
+        evaluateSphericalHarmonics(frame.left(), 1, shL.data());
+        evaluateSphericalHarmonics(frame.left() * -1.0f, 1, shR.data());
+        const auto dims = space.dimensions();
+        const float longest = std::max({dims.x, dims.y, dims.z, 1.0f});
+        const float axis[4] = {1.0f, dims.y / longest, dims.z / longest, dims.x / longest};
         float lpL = 0.0f;
         float lpR = 0.0f;
 
@@ -294,12 +309,13 @@ StereoBrir RirGenerator::generateBrir(const SpaceProfile& space, const HrtfDatab
 
             const float fadeIn = std::min(1.0f, dt / 0.010f);
 
-            const float wL = dist(rng);
-            const float wR = dist(rng);
-
-            // 3D Binaural Decorrelation & Envelopment
-            const float diffL = (wL * 0.80f + wR * 0.20f) * env * diffuseScale * fadeIn;
-            const float diffR = (wR * 0.80f + wL * 0.20f) * env * diffuseScale * fadeIn;
+            float fieldL = 0.0f, fieldR = 0.0f;
+            for (std::size_t channel = 0; channel < 4; ++channel) {
+                const float field = dist(rng) * axis[channel] * (channel == 0 ? 0.75f : 0.4330127f);
+                fieldL += field * shL[channel]; fieldR += field * shR[channel];
+            }
+            const float diffL = fieldL * env * diffuseScale * fadeIn;
+            const float diffR = fieldR * env * diffuseScale * fadeIn;
 
             lpL += (1.0f - dampCoeff) * (diffL - lpL);
             lpR += (1.0f - dampCoeff) * (diffR - lpR);
@@ -312,44 +328,18 @@ StereoBrir RirGenerator::generateBrir(const SpaceProfile& space, const HrtfDatab
     // -------------------------------------------------------------------------
     // 3. Acoustic Frequency-Peak & Headroom-Safe Normalization
     // -------------------------------------------------------------------------
-    dsp::RealFft fft(cfg_.maxTaps);
-    float maxFreqGain = 0.0f;
-    if (fft.valid()) {
-        std::vector<float> specL(fft.spectrumFloats(), 0.0f);
-        std::vector<float> specR(fft.spectrumFloats(), 0.0f);
-        fft.forward(brir.left.data(), specL.data());
-        fft.forward(brir.right.data(), specR.data());
-        for (std::size_t k = 0; k < fft.numBins(); ++k) {
-            const float magL = std::sqrt(specL[2 * k] * specL[2 * k] + specL[2 * k + 1] * specL[2 * k + 1]);
-            const float magR = std::sqrt(specR[2 * k] * specR[2 * k] + specR[2 * k + 1] * specR[2 * k + 1]);
-            maxFreqGain = std::max({maxFreqGain, magL, magR});
+    // A spectral/sample peak cap cannot bound arbitrary programme peaks. The
+    // previous max(freqNorm, 0.51/maxPeak) explicitly overrode its gain cap.
+    // Never boost a distant/weak IR: preserve physical attenuation, cap L1.
+    if (cfg_.normalize) {
+        double sumL = 0.0, sumR = 0.0;
+        for (std::size_t n = 0; n < brir.taps; ++n) {
+            sumL += std::fabs(brir.left[n]); sumR += std::fabs(brir.right[n]);
         }
-    }
-
-    float maxPeak = 0.0f;
-    for (std::size_t i = 0; i < cfg_.maxTaps; ++i) {
-        maxPeak = std::max({maxPeak, std::fabs(brir.left[i]), std::fabs(brir.right[i])});
-    }
-
-    constexpr float kTargetMaxFreqGain = 1.35f;
-    constexpr float kTargetMaxTimePeak = 0.85f;
-    constexpr float kMinTimePeak = 0.55f;
-
-    float norm = 1.0f;
-    if (maxPeak > 1.0e-5f) {
-        norm = kMinTimePeak / maxPeak;
-    }
-    if (maxFreqGain > 1.0e-5f && (maxFreqGain * norm) > kTargetMaxFreqGain) {
-        const float freqNorm = kTargetMaxFreqGain / maxFreqGain;
-        norm = std::max(freqNorm, 0.51f / maxPeak);
-    }
-    if (maxPeak * norm > kTargetMaxTimePeak && maxPeak > 1.0e-5f) {
-        norm = kTargetMaxTimePeak / maxPeak;
-    }
-
-    for (std::size_t i = 0; i < cfg_.maxTaps; ++i) {
-        brir.left[i] *= norm;
-        brir.right[i] *= norm;
+        const float gain = static_cast<float>(1.0 / std::max({1.0, sumL, sumR}));
+        for (std::size_t n = 0; n < brir.taps; ++n) {
+            brir.left[n] *= gain; brir.right[n] *= gain;
+        }
     }
 
     return brir;

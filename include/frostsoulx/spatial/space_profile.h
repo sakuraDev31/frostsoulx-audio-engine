@@ -148,6 +148,7 @@ public:
     // -------------------------------------------------------------------------
     // Factory space profile presets (12 physical environments):
     // -------------------------------------------------------------------------
+    static SpaceProfile createAnechoic();
     static SpaceProfile createBathroom();
     static SpaceProfile createLivingRoom();
     static SpaceProfile createMediumHall();
@@ -173,7 +174,8 @@ public:
         ClosedCar,
         OpenRoad,
         Cave,
-        Stadium
+        Stadium,
+        Anechoic
     };
 
     static SpaceProfile createPreset(Preset preset);
