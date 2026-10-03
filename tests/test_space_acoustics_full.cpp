@@ -207,6 +207,7 @@ void test11_3dOrbit() {
 void test12_Engine3dOrbit(frostsoulx::ImmersiveAudioEngine& engine) {
     using namespace frostsoulx::spatial;
     engine.prepare(48000, 384);
+    engine.setSpacePreset(SpaceProfile::Preset::Anechoic);
     engine.setOrbitPosition(0.0f, 0.0f, 3.0f);
     engine.setOrbitEnabled(true);
 
@@ -215,20 +216,21 @@ void test12_Engine3dOrbit(frostsoulx::ImmersiveAudioEngine& engine) {
     checkNear(engine.orbitElevation(), 0.0, 1.0e-5, "12. Orbit starts at horizontal elevation");
     checkNear(engine.orbitRadius(), 3.0, 1.0e-5, "12. Orbit radius persists");
 
+    const auto listener = engine.activeSpaceProfile().listenerPosition();
     auto p0 = engine.activeSpaceProfile().sourcePosition();
-    checkNear(p0.x, 3.0, 1.0e-4, "12. Front orbit position is +X engine-forward");
-    checkNear(p0.y, 0.0, 1.0e-4, "12. Front orbit position is centered");
-    checkNear(p0.z, 0.0, 1.0e-4, "12. Front orbit position is horizontal");
+    checkNear(p0.x - listener.x, 3.0, 1.0e-4, "12. Front orbit position is +X engine-forward");
+    checkNear(p0.y - listener.y, 0.0, 1.0e-4, "12. Front orbit position is centered");
+    checkNear(p0.z - listener.z, 0.0, 1.0e-4, "12. Front orbit position is horizontal");
 
     engine.setOrbitAzimuth(90.0f);
     auto p90 = engine.activeSpaceProfile().sourcePosition();
-    checkNear(p90.x, 0.0, 1.0e-4, "12. +90° orbit is lateral");
-    checkNear(p90.y, 3.0, 1.0e-4, "12. +90° orbit is left");
-    checkNear(p90.z, 0.0, 1.0e-4, "12. +90° orbit stays horizontal");
+    checkNear(p90.x - listener.x, 0.0, 1.0e-4, "12. +90° orbit is lateral");
+    checkNear(p90.y - listener.y, 3.0, 1.0e-4, "12. +90° orbit is left");
+    checkNear(p90.z - listener.z, 0.0, 1.0e-4, "12. +90° orbit stays horizontal");
 
     engine.setOrbitElevation(45.0f);
     auto p45 = engine.activeSpaceProfile().sourcePosition();
-    checkNear(p45.z, 3.0f * std::sin(45.0f * rt::kDegToRad), 1.0e-4,
+    checkNear(p45.z, 3.0f * std::sin(45.0f * frostsoulx::rt::kDegToRad), 1.0e-4,
               "12. Elevation raises the orbit source");
 
     engine.advanceOrbit(270.0f);
@@ -241,7 +243,7 @@ void test12_Engine3dOrbit(frostsoulx::ImmersiveAudioEngine& engine) {
 // -----------------------------------------------------------------------------
 // 12. Listener Rotation
 // -----------------------------------------------------------------------------
-void test12_ListenerRotation(frostsoulx::spatial::RirGenerator& gen) {
+void test13_ListenerRotation(frostsoulx::spatial::RirGenerator& gen) {
     using namespace frostsoulx::spatial;
     auto space = SpaceProfile::createLivingRoom();
     space.setSourcePosition({2.0f, 0.0f, 1.2f}); // in front
@@ -254,7 +256,7 @@ void test12_ListenerRotation(frostsoulx::spatial::RirGenerator& gen) {
 // -----------------------------------------------------------------------------
 // 13. Distance Change
 // -----------------------------------------------------------------------------
-void test13_DistanceChange(frostsoulx::spatial::RirGenerator& gen) {
+void test14_DistanceChange(frostsoulx::spatial::RirGenerator& gen) {
     using namespace frostsoulx::spatial;
     auto space = SpaceProfile::createOpenRoad();
     space.setListenerPosition({0.0f, 0.0f, 1.2f});
@@ -281,7 +283,7 @@ void test13_DistanceChange(frostsoulx::spatial::RirGenerator& gen) {
 // -----------------------------------------------------------------------------
 // 14. Long IR Spanning Multiple Convolution Tiers
 // -----------------------------------------------------------------------------
-void test14_MultiTierLongIr(frostsoulx::spatial::RirGenerator& gen) {
+void test15_MultiTierLongIr(frostsoulx::spatial::RirGenerator& gen) {
     using namespace frostsoulx::dsp;
     auto space = frostsoulx::spatial::SpaceProfile::createLargeHall();
     frostsoulx::spatial::RirGeneratorConfig cfg;
@@ -324,7 +326,7 @@ void test14_MultiTierLongIr(frostsoulx::spatial::RirGenerator& gen) {
 // -----------------------------------------------------------------------------
 // 15. Full Late-Tail Contribution
 // -----------------------------------------------------------------------------
-void test15_FullLateTailContribution() {
+void test16_FullLateTailContribution() {
     using namespace frostsoulx::dsp;
     NonUniformConvolver::Config ccfg;
     ccfg.headBlock = 128;
@@ -357,7 +359,7 @@ void test15_FullLateTailContribution() {
 // -----------------------------------------------------------------------------
 // 16. MIMO Channel Isolation
 // -----------------------------------------------------------------------------
-void test16_MimoChannelIsolation(frostsoulx::ImmersiveAudioEngine& engine) {
+void test17_MimoChannelIsolation(frostsoulx::ImmersiveAudioEngine& engine) {
     engine.prepare(48000, 384);
     engine.setEnabled(true);
 
@@ -376,7 +378,7 @@ void test16_MimoChannelIsolation(frostsoulx::ImmersiveAudioEngine& engine) {
 // -----------------------------------------------------------------------------
 // 17. IR Crossfade (Dual-Bank Lock-Free Transition)
 // -----------------------------------------------------------------------------
-void test17_IrCrossfade(frostsoulx::ImmersiveAudioEngine& engine) {
+void test18_IrCrossfade(frostsoulx::ImmersiveAudioEngine& engine) {
     engine.prepare(48000, 384);
     engine.setEnabled(true);
     engine.setSpacePreset(frostsoulx::spatial::SpaceProfile::Preset::LivingRoom);
@@ -402,7 +404,7 @@ void test17_IrCrossfade(frostsoulx::ImmersiveAudioEngine& engine) {
 // -----------------------------------------------------------------------------
 // 18. Partial Host Blocks
 // -----------------------------------------------------------------------------
-void test18_PartialHostBlocks(frostsoulx::ImmersiveAudioEngine& engine) {
+void test19_PartialHostBlocks(frostsoulx::ImmersiveAudioEngine& engine) {
     engine.prepare(48000, 512);
     engine.setEnabled(true);
 
@@ -418,7 +420,7 @@ void test18_PartialHostBlocks(frostsoulx::ImmersiveAudioEngine& engine) {
 // -----------------------------------------------------------------------------
 // 19. Reset()
 // -----------------------------------------------------------------------------
-void test19_Reset(frostsoulx::ImmersiveAudioEngine& engine) {
+void test20_Reset(frostsoulx::ImmersiveAudioEngine& engine) {
     engine.prepare(48000, 384);
     engine.setEnabled(true);
 
@@ -437,7 +439,7 @@ void test19_Reset(frostsoulx::ImmersiveAudioEngine& engine) {
 // -----------------------------------------------------------------------------
 // 20. Sample-Rate Changes
 // -----------------------------------------------------------------------------
-void test20_SampleRateChanges(frostsoulx::ImmersiveAudioEngine& engine) {
+void test21_SampleRateChanges(frostsoulx::ImmersiveAudioEngine& engine) {
     const int rates[] = {44100, 48000, 96000};
     for (int sr : rates) {
         bool ok = engine.prepare(sr, 384);
@@ -451,7 +453,7 @@ void test20_SampleRateChanges(frostsoulx::ImmersiveAudioEngine& engine) {
 // -----------------------------------------------------------------------------
 // 21. Invalid Coordinates Clamping
 // -----------------------------------------------------------------------------
-void test21_InvalidCoordinates(frostsoulx::ImmersiveAudioEngine& engine) {
+void test22_InvalidCoordinates(frostsoulx::ImmersiveAudioEngine& engine) {
     engine.prepare(48000, 384);
     // Position far outside room bounds
     engine.setSourcePosition(1000.0f, -500.0f, 300.0f);
@@ -462,7 +464,7 @@ void test21_InvalidCoordinates(frostsoulx::ImmersiveAudioEngine& engine) {
 // -----------------------------------------------------------------------------
 // 22. NaN / Inf Protection
 // -----------------------------------------------------------------------------
-void test22_NanInfProtection(frostsoulx::ImmersiveAudioEngine& engine) {
+void test23_NanInfProtection(frostsoulx::ImmersiveAudioEngine& engine) {
     engine.prepare(48000, 384);
     engine.setEnabled(true);
 
@@ -535,22 +537,22 @@ int main() {
     test10_OverheadArc();
     test11_3dOrbit();
     test12_Engine3dOrbit(engine);
-    test12_ListenerRotation(gen);
-    test13_DistanceChange(gen);
-    test14_MultiTierLongIr(gen);
-    test15_FullLateTailContribution();
-    test16_MimoChannelIsolation(engine);
-    test17_IrCrossfade(engine);
-    test18_PartialHostBlocks(engine);
-    test19_Reset(engine);
-    test20_SampleRateChanges(engine);
-    test21_InvalidCoordinates(engine);
-    test22_NanInfProtection(engine);
+    test13_ListenerRotation(gen);
+    test14_DistanceChange(gen);
+    test15_MultiTierLongIr(gen);
+    test16_FullLateTailContribution();
+    test17_MimoChannelIsolation(engine);
+    test18_IrCrossfade(engine);
+    test19_PartialHostBlocks(engine);
+    test20_Reset(engine);
+    test21_SampleRateChanges(engine);
+    test22_InvalidCoordinates(engine);
+    test23_NanInfProtection(engine);
 
     runPerformanceBenchmarks(engine);
 
     if (g_failures != 0) {
-        std::cerr << "\n" << g_failures << " check(s) failed in 22-point test suite!\n";
+        std::cerr << "\n" << g_failures << " check(s) failed in 23-point test suite!\n";
         return 1;
     }
     std::cout << "\n>>> ALL 23 CORRECTNESS TESTS AND PERFORMANCE BENCHMARKS PASSED SUCCESSFULLY! <<<\n";
