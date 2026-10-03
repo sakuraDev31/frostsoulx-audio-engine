@@ -202,6 +202,43 @@ void test11_3dOrbit() {
 }
 
 // -----------------------------------------------------------------------------
+// 12. Engine 3D Orbit Mode
+// -----------------------------------------------------------------------------
+void test12_Engine3dOrbit(frostsoulx::ImmersiveAudioEngine& engine) {
+    using namespace frostsoulx::spatial;
+    engine.prepare(48000, 384);
+    engine.setOrbitPosition(0.0f, 0.0f, 3.0f);
+    engine.setOrbitEnabled(true);
+
+    check(engine.orbitEnabled(), "12. Orbit mode enables");
+    checkNear(engine.orbitAzimuth(), 0.0, 1.0e-5, "12. Orbit starts at front azimuth");
+    checkNear(engine.orbitElevation(), 0.0, 1.0e-5, "12. Orbit starts at horizontal elevation");
+    checkNear(engine.orbitRadius(), 3.0, 1.0e-5, "12. Orbit radius persists");
+
+    auto p0 = engine.activeSpaceProfile().sourcePosition();
+    checkNear(p0.x, 3.0, 1.0e-4, "12. Front orbit position is +X engine-forward");
+    checkNear(p0.y, 0.0, 1.0e-4, "12. Front orbit position is centered");
+    checkNear(p0.z, 0.0, 1.0e-4, "12. Front orbit position is horizontal");
+
+    engine.setOrbitAzimuth(90.0f);
+    auto p90 = engine.activeSpaceProfile().sourcePosition();
+    checkNear(p90.x, 0.0, 1.0e-4, "12. +90° orbit is lateral");
+    checkNear(p90.y, 3.0, 1.0e-4, "12. +90° orbit is left");
+    checkNear(p90.z, 0.0, 1.0e-4, "12. +90° orbit stays horizontal");
+
+    engine.setOrbitElevation(45.0f);
+    auto p45 = engine.activeSpaceProfile().sourcePosition();
+    checkNear(p45.z, 3.0f * std::sin(45.0f * rt::kDegToRad), 1.0e-4,
+              "12. Elevation raises the orbit source");
+
+    engine.advanceOrbit(270.0f);
+    checkNear(engine.orbitAzimuth(), 0.0, 1.0e-5, "12. Orbit azimuth wraps at 360°");
+
+    engine.setOrbitRadius(5.0f);
+    checkNear(engine.orbitRadius(), 5.0, 1.0e-5, "12. Orbit radius updates");
+}
+
+// -----------------------------------------------------------------------------
 // 12. Listener Rotation
 // -----------------------------------------------------------------------------
 void test12_ListenerRotation(frostsoulx::spatial::RirGenerator& gen) {
@@ -477,7 +514,7 @@ void runPerformanceBenchmarks(frostsoulx::ImmersiveAudioEngine& engine) {
 } // namespace
 
 int main() {
-    std::cout << "Running Complete 22-Point Acoustic Space Correctness Test Suite...\n";
+    std::cout << "Running Complete 23-Point Acoustic Space Correctness Test Suite...\n";
     frostsoulx::spatial::RirGeneratorConfig cfg;
     cfg.sampleRate = 48000.0;
     cfg.maxTaps = 8192;
@@ -497,6 +534,7 @@ int main() {
     test9_SourceLeftRightMovement(gen);
     test10_OverheadArc();
     test11_3dOrbit();
+    test12_Engine3dOrbit(engine);
     test12_ListenerRotation(gen);
     test13_DistanceChange(gen);
     test14_MultiTierLongIr(gen);
@@ -515,6 +553,6 @@ int main() {
         std::cerr << "\n" << g_failures << " check(s) failed in 22-point test suite!\n";
         return 1;
     }
-    std::cout << "\n>>> ALL 22 CORRECTNESS TESTS AND PERFORMANCE BENCHMARKS PASSED SUCCESSFULLY! <<<\n";
+    std::cout << "\n>>> ALL 23 CORRECTNESS TESTS AND PERFORMANCE BENCHMARKS PASSED SUCCESSFULLY! <<<\n";
     return 0;
 }
