@@ -238,6 +238,36 @@ void test12_Engine3dOrbit(frostsoulx::ImmersiveAudioEngine& engine) {
 
     engine.setOrbitRadius(5.0f);
     checkNear(engine.orbitRadius(), 5.0, 1.0e-5, "12. Orbit radius updates");
+
+    // Orbit is a spatial mode layered over the room, not another room preset.
+    const presets = {
+        SpaceProfile::Preset::Bathroom,
+        SpaceProfile::Preset::LivingRoom,
+        SpaceProfile::Preset::MediumHall,
+        SpaceProfile::Preset::LargeHall,
+        SpaceProfile::Preset::ConcertHall,
+        SpaceProfile::Preset::SubwayPlatform,
+        SpaceProfile::Preset::LongSubwayTunnel,
+        SpaceProfile::Preset::LongTunnel,
+        SpaceProfile::Preset::ClosedCar,
+        SpaceProfile::Preset::OpenRoad,
+        SpaceProfile::Preset::Cave,
+        SpaceProfile::Preset::Stadium,
+        SpaceProfile::Preset::Anechoic,
+    };
+    for (const auto preset : presets) {
+        engine.setSpacePreset(preset);
+        const auto listenerAfter = engine.activeSpaceProfile().listenerPosition();
+        const auto sourceAfter = engine.activeSpaceProfile().sourcePosition();
+        const auto offsetAfter = sourceAfter - listenerAfter;
+        check(engine.orbitEnabled(), "12. Orbit remains enabled after room preset change");
+        checkNear(offsetAfter.length(), engine.orbitRadius(), 1.0e-3,
+                  "12. Orbit radius remains attached to listener across room presets");
+    }
+
+    engine.setOrbitEnabled(false);
+    check(!engine.orbitEnabled(), "12. Orbit mode disables cleanly");
+
 }
 
 // -----------------------------------------------------------------------------
