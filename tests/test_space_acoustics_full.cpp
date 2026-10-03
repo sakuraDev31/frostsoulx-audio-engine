@@ -230,7 +230,7 @@ void test12_Engine3dOrbit(frostsoulx::ImmersiveAudioEngine& engine) {
 
     engine.setOrbitElevation(45.0f);
     auto p45 = engine.activeSpaceProfile().sourcePosition();
-    checkNear(p45.z, 3.0f * std::sin(45.0f * frostsoulx::rt::kDegToRad), 1.0e-4,
+    checkNear(p45.z - listener.z, 3.0f * std::sin(45.0f * frostsoulx::rt::kDegToRad), 1.0e-4,
               "12. Elevation raises the orbit source");
 
     engine.advanceOrbit(270.0f);
